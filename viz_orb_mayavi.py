@@ -5,6 +5,8 @@
 
 from physics import A_to_a0, V_to_Kcal_mol
 import numpy as np
+from sys import exit
+import os
 
 try:
 	from enthought.mayavi import mlab
@@ -14,18 +16,19 @@ except ImportError:
 	try:
 		from mayavi import mlab
 	except ImportError:
-		from sys import exit
 		stderr.write("import mayavi failed\n")
 		exit(1)
 
+## No screen
+mlab.options.offscreen = True
 
 
 ## Initialize visualization details common to all jobs
-with open("Atoms.csv", "r") as f:
+with open('%s/Atoms.csv' % os.path.dirname(__file__), "r") as f:
 	tab = [line.split() for line in f]
 
 ## Elevation angle
-angle = 20
+angle = 10
 
 def _init_scene(j_data):
 	u"""Initializes the MayaVi scene.
@@ -40,11 +43,9 @@ def _init_scene(j_data):
 	  normal : numpy.ndarray
 	The normal vector of the viewing plane (used mostly for the topological view).
 	"""
-
 	figure = mlab.figure(bgcolor=(1,1,1), fgcolor=(0,0,0))
 	figure.scene.disable_render= True
-	geom = np.array(j_data["results"]["geometry"]["elements_3D_coords_converged"]).reshape((-1,3))/A_to_a0
-
+	geom = np.array(j_data[0]["results"]["geometry"]["elements_3D_coords_converged"]).reshape((-1,3))/A_to_a0
 	if len(geom) > 1:
 		## Eliminate hydrogens
 		#mod_geom = geom[np.array(map(int, [p[1] for p in qc.geo_info if p[2] != '1.0']))]
@@ -53,7 +54,8 @@ def _init_scene(j_data):
 		eival, eivec = np.linalg.eig(np.cov((mod_geom - np.mean(mod_geom, axis=0)).T))
 		sort = eival.argsort()
 		eival, eivec = eival[sort], eivec[:,sort]
-		normal = eivec[:,0]
+
+                normal = eivec[:,0]
 		## Grab point from best fitting plane (NOT the view) to use as focal point
 		#point = np.mean(geom, axis=0)
 
@@ -63,7 +65,7 @@ def _init_scene(j_data):
 		## Calculate azimuth a and elevation e
 		## Python and Numpy use radians, but MayaVi uses degrees
 		a, e = np.rad2deg(atan2(normal[1], normal[0])), np.rad2deg(acos(normal[2]/r))
-		mlab.view(azimuth=a, elevation=e+angle, figure=figure)
+                mlab.view(azimuth=a, elevation=e+angle, figure=figure)
 
 		## DEBUG: show normal and view vectors
 		#print a, e
@@ -76,8 +78,8 @@ def _init_scene(j_data):
 		normal = np.array([0,0,1])
 		mlab.view(azimuth=0, elevation=0, figure=figure)
 
-	conn = j_data["molecule"]["connectivity"]["atom_pairs"]
-	atom_nums = j_data["molecule"]["atoms_Z"]
+	conn = j_data[0]["molecule"]["connectivity"]["atom_pairs"]
+	atom_nums = j_data[0]["molecule"]["atoms_Z"]
 
 	## Draw atoms and bonds
 	for i, atom in enumerate(atom_nums):
@@ -100,6 +102,21 @@ def _init_scene(j_data):
 
 	return figure, normal
 
+## Set the Iso contour value for mayavi from a percent
+# Choose the % (between 0 to 100) of the positive values to show in picture.
+#IsoContourPercent=30
+
+def CalcCutOffP(data,IsoContourPercent=30,i=0):
+	#data are the function values for each voxels. Transforma as a list, sort and select the positive values
+	np.sort(data)#.ravel()) AttributeError: 'list' object has no attribute 'ravel'
+        data1DsortedP=data[data>0]
+	#cumulative sum of function values, normalize
+ 	cumdata1DsortP=np.cumsum(data1DsortedP)
+	cumdata1DsortPnorm=cumdata1DsortP/cumdata1DsortP[-1]*100.
+        np.save("data%d.npy" % i, cumdata1DsortPnorm)
+	#1/0
+        #return the value of the voxel that is more intense than the IsoContourPercent. that should be the CutOff value.
+	return data1DsortedP[cumdata1DsortPnorm>=(100.-IsoContourPercent)][0]
 
 
 ## Visualize
@@ -120,15 +137,15 @@ def topo(j_data, file_name=None, size=(600,600)):
 	"""
 
 	figure, normal = _init_scene(j_data)
-	geom = np.array(j_data["results"]["geometry"]["elements_3D_coords_converged"]).reshape((-1,3))/A_to_a0
+	geom = np.array(j_data[0]["results"]["geometry"]["elements_3D_coords_converged"]).reshape((-1,3))/A_to_a0
 
 	## Show labels and numbers ( = indices + 1 )
-	for i, atom in enumerate(j_data["molecule"]["atoms_Z"]):
+	for i, atom in enumerate(j_data[0]["molecule"]["atoms_Z"]):
 		P, label = geom[i], tab[atom][1]
 		mlab.text3d(P[0] - normal[0], P[1] - normal[1], P[2] - normal[2], label + str(i + 1), color=(0,0,0), scale=0.5, figure=figure)
 
 	if file_name is not None:
-		mlab.savefig("{}-TOPO.png".format(file_name), figure=figure, size=size)
+		mlab.savefig("{}-TOPOLOGY.png".format(file_name), figure=figure, size=size)
 
 	return figure
 
@@ -158,12 +175,13 @@ def viz_MO(data, X, Y, Z, j_data, file_name=None, labels=None, size=(600,600)):
 	for i, series in enumerate(data):
 
 		MO_data = mlab.pipeline.scalar_field(X, Y, Z, series, figure=figure)
-
-		MOp = mlab.pipeline.iso_surface(MO_data, figure=figure, contours=[ 0.05 ], color=(0.4, 0, 0.235))
-		MOn = mlab.pipeline.iso_surface(MO_data, figure=figure, contours=[-0.05 ], color=(0.95, 0.90, 0.93))
+		Cutoff = CalcCutOffP(series,i=i)
+		print Cutoff
+                MOp = mlab.pipeline.iso_surface(MO_data, figure=figure, contours=[ Cutoff ], color=(0.4, 0, 0.235))
+		MOn = mlab.pipeline.iso_surface(MO_data, figure=figure, contours=[-Cutoff ], color=(0.95, 0.90, 0.93))
 
 		if file_name is not None:
-			mlab.savefig("./{}-MO-{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
+                        mlab.savefig("{}-MO-{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
 
 		MOp.remove()
 		MOn.remove()
@@ -196,13 +214,13 @@ def viz_EDD(data, X, Y, Z, j_data, file_name=None, labels=None, size=(600,600)):
 	for i, series in enumerate(data):
 		D_data = mlab.pipeline.scalar_field(X, Y, Z, series, figure=figure)
 
-		Dp = mlab.pipeline.iso_surface(D_data, figure=figure, contours=[ 0.00025 ], color=(0.0, 0.5, 0.5))
-		Dn = mlab.pipeline.iso_surface(D_data, figure=figure, contours=[-0.00025 ], color=(0.95, 0.95, 0.95))
+		Dp = mlab.pipeline.iso_surface(D_data, figure=figure, contours=[ 0.0035 ], color=(0.0, 0.5, 0.5))
+		Dn = mlab.pipeline.iso_surface(D_data, figure=figure, contours=[-0.0035 ], color=(0.95, 0.95, 0.95))
 		#Dn.actor.property.representation = 'wireframe'
 		#Dn.actor.property.line_width = 0.5
 
 		if file_name is not None:
-			mlab.savefig("./{}-EDD-{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
+			mlab.savefig("{}-EDD-{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
 
 		Dp.remove()
 		Dn.remove()
@@ -239,7 +257,7 @@ def viz_BARY(data, j_data, file_name=None, labels=None, size=(600,600)):
 		Mu = mlab.quiver3d(D[1][0], D[1][1], D[1][2], D[0][0] - D[1][0], D[0][1] - D[1][1], D[0][2] - D[1][2], figure=figure, mode='arrow', scale_factor=1.0, color=(0.0, 0.5, 0.5))
 
 		if file_name is not None:
-			mlab.savefig("./{}-BARY-{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
+			mlab.savefig("{}-BARY-{}.png".format(file_name, labels[i] if labels is not None else i), figure=figure, size=size)
 
 		#Pp.remove()
 		#Pm.remove()
@@ -305,12 +323,85 @@ def viz_Potential(r_data, V_data, X, Y, Z, j_data, file_name=None, size=(600,600
 
 	mlab.colorbar(title='Kcal/mol', orientation='vertical', nb_labels=3)
 
-	mlab.show()
+	#mlab.show()
 
 	if file_name is not None:
-		mlab.savefig("./{}-Potential.png".format(file_name), figure=figure, size=size)
+		mlab.savefig("{}-Potential.png".format(file_name), figure=figure, size=size)
 
 	return figure
 
-def viz_Fukui(data, X, Y, Z, j_data, file_name=None, size=(600,600)):
-	pass
+def viz_Fukui(data, X, Y, Z, j_data, file_name=None, labels=None, size=(600,600)):
+        u"""Visualizes the fukui density differences for the molecule.
+
+        ** Parameters **
+          data : list(numpy.ndarray)
+        Voxels containing the scalar values of the electron density difference to plot.
+          X, Y, Z : numpy.ndarray
+        Meshgrids as generated by numpy.mgrid, for positioning the voxels.
+          j_data : dict
+        Data on the optimized state of the molecule, as deserialized from the scanlog format.
+          file_name : str, optional
+        Base name of the files in which to save the images.
+          label : text
+        Label to append to `file_name` for each series in `data`. "plus" for sp_plus - opt; "minus" for opt - sp_minus.
+          size : tuple(int, int), optional
+        The size of the image to save.
+
+        ** Returns **
+          figure : mayavi.core.scene.Scene
+        The MayaVi scene containing the visualization.
+        """
+
+        figure = _init_scene(j_data)[0]
+        F_data = mlab.pipeline.scalar_field(X, Y, Z, data, figure=figure)
+
+        Fp = mlab.pipeline.iso_surface(F_data, figure=figure, contours=[ 0.0035 ], color=(0.0, 0.5, 0.5))
+        Fn = mlab.pipeline.iso_surface(F_data, figure=figure, contours=[-0.0035 ], color=(0.95, 0.95, 0.95))
+        #Fn.actor.property.representation = 'wireframe'
+        #Fn.actor.property.line_width = 0.5
+
+        if file_name is not None:
+            mlab.savefig("{}-fukui-{}.png".format(file_name, labels), figure=figure, size=size)
+            Fp.remove()
+            Fn.remove()
+
+        return figure
+
+def viz_Fdual(data, X, Y, Z, j_data, file_name=None, size=(600,600)):
+        u"""Visualizes the fukui density differences for the molecule.
+
+        ** Parameters **
+          data : list(numpy.ndarray)
+        Voxels containing the scalar values of the electron density difference to plot.
+          X, Y, Z : numpy.ndarray
+        Meshgrids as generated by numpy.mgrid, for positioning the voxels.
+          j_data : dict
+        Data on the optimized state of the molecule, as deserialized from the scanlog format.
+          file_name : str, optional
+        Base name of the files in which to save the images.
+          size : tuple(int, int), optional
+        The size of the image to save.
+
+        ** Returns **
+          figure : mayavi.core.scene.Scene
+        The MayaVi scene containing the visualization.
+        """
+
+        figure = _init_scene(j_data)[0]
+        F_data = mlab.pipeline.scalar_field(X, Y, Z, data, figure=figure)
+        #D_data = mlab.pipeline.scalar_field(X, Y, Z, series, figure=figure)
+
+        Fp = mlab.pipeline.iso_surface(F_data, figure=figure, contours=[ 0.0035 ], color=(0.0, 0.5, 0.5))
+        Fn = mlab.pipeline.iso_surface(F_data, figure=figure, contours=[-0.0035 ], color=(0.95, 0.95, 0.95))
+        #Dn.actor.property.representation = 'wireframe'
+        #Dn.actor.property.line_width = 0.5
+
+        if file_name is not None:
+            mlab.savefig("{}-Fdual.png".format(file_name), figure=figure, size=size)
+            Fp.remove()
+            Fn.remove()
+
+        return figure
+
+
+        pass

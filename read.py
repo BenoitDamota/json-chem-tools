@@ -1905,6 +1905,7 @@ def read_wfx(filename, all_mo=False, spin=None, **kwargs):
                                    'before `<Nuclear Names>`.')
       for i in range(at_num):
         qc.geo_info[i][0] = flines[il+i+1].replace(' ','').replace('\n','')
+        qc.geo_info[i][2] = flines[il+i+1].join(ch for ch in flines[il+i+1] if ch.isdigit()).replace(' ','').replace('\n','') 
     elif '<Atomic Numbers>' in line:
       if not at_num: raise IOError('`<Number of Nuclei>` has to be found ' +
                                    'before `<Atomic Numbers>`.')
@@ -1952,9 +1953,13 @@ def read_wfx(filename, all_mo=False, spin=None, **kwargs):
         restricted = restricted and ('_' in qc.mo_spec[i]['spin'])
     elif '<MO Number>' in line:
       index = int(flines[il+1])-1
+      qc.mo_spec[index]['coeffs'] = []
       for i in range(ao_num):
-        qc.mo_spec[index]['coeffs'][i] = float(flines[il+3+i])
-    elif '</' in line:
+        if "<" in flines[il+3+i]:
+          break
+        else:
+          qc.mo_spec[index]['coeffs'] += map(float, flines[il+3+i].split())
+    elif "</" in line:
       sec_flag = None
     elif sec_flag is not None:
       if sec_flag == 'ao_center':
@@ -2138,18 +2143,18 @@ def convert_json(jData, all_mo=False, spin=None):
   qc = QCinfo()
   
   # Converting all information concerning atoms and geometry
-  qc.geo_spec = numpy.array(jData['results']['geometry']['elements_3D_coords_converged']).reshape((-1, 3)) * aa_to_au
-  for ii in range(jData["molecule"]['nb_atoms']):
-    symbol = get_atom_symbol(atom=jData["molecule"]['atoms_Z'][ii])
-    qc.geo_info.append([symbol,str(ii+1),str(jData["molecule"]['atoms_Z'][ii])])
+  qc.geo_spec = numpy.array(jData[0]['results']['geometry']['elements_3D_coords_converged']).reshape((-1, 3)) * aa_to_au
+  for ii in range(jData[0]["molecule"]['nb_atoms']):
+    symbol = get_atom_symbol(atom=jData[0]["molecule"]['atoms_Z'][ii])
+    qc.geo_info.append([symbol,str(ii+1),str(jData[0]["molecule"]['atoms_Z'][ii])])
   
   # Convert geo_info and geo_spec to numpy.ndarrays
   qc.format_geo()
   
   # Converting all information about atomic basis set
   from pickle import loads
-  gbasis = loads(jData['comp_details']['general']['basis_set'])
-  for ii in range(jData["molecule"]['nb_atoms']):
+  gbasis = loads(jData[0]['comp_details']['general']['basis_set'])
+  for ii in range(jData[0]["molecule"]['nb_atoms']):
     for jj in range(len(gbasis[ii])):
       pnum = len(gbasis[ii][jj][1])
       qc.ao_spec.append({'atom': ii,
@@ -2161,9 +2166,9 @@ def convert_json(jData, all_mo=False, spin=None):
         qc.ao_spec[-1]['coeffs'][kk][0] = gbasis[ii][jj][1][kk][0]
         qc.ao_spec[-1]['coeffs'][kk][1] = gbasis[ii][jj][1][kk][1]
 
-  if "ao_names" in jData['comp_details']['general']:
+  if "ao_names" in jData[0]['comp_details']['general']:
     # Reconstruct exponents list for ao_spec
-    aonames = jData['comp_details']['general']['ao_names']
+    aonames = jData[0]['comp_details']['general']['ao_names']
     cartesian_basis = True
     for i in aonames:
       if '+' in i or '-' in i:
@@ -2195,8 +2200,8 @@ def convert_json(jData, all_mo=False, spin=None):
         count += 1
   
   # Converting all information about molecular orbitals
-  ele_num = numpy.sum(jData["molecule"]['atoms_Z']) - numpy.sum(jData['comp_details']['general']['core_electrons_per_atoms']) - jData['molecule']['charge']
-  ue = (jData['molecule']['multiplicity']-1)
+  ele_num = numpy.sum(jData[0]["molecule"]['atoms_Z']) - numpy.sum(jData[0]['comp_details']['general']['core_electrons_per_atoms']) - jData[0]['molecule']['charge']
+  ue = (jData[0]['molecule']['multiplicity']-1)
   
   # Check for natural orbitals and occupation numbers
   is_natorb = False
@@ -2206,7 +2211,7 @@ def convert_json(jData, all_mo=False, spin=None):
   #                  ' ccData, but no natural occupation numbers (`nooccnos`)!')
   #  is_natorb = True
   
-  restricted = (len(jData['results']['wavefunction']['MO_sym']) == 1)
+  restricted = (len(jData[0]['results']['wavefunction']['MO_energies']) == 1)
   if spin is not None:
     if spin != 'alpha' and spin != 'beta':
       raise IOError('`spin=%s` is not a valid option' % spin)
@@ -2217,8 +2222,8 @@ def convert_json(jData, all_mo=False, spin=None):
   
   import scipy.sparse
   sym = {}
-  shape = (jData['results']['wavefunction']['MO_number_kept'], jData['comp_details']['general']['basis_set_size'])
-  pre_mocoeffs = jData['results']["wavefunction"]["MO_coefs"]
+  shape = (jData[0]['results']['wavefunction']['MO_number_kept'], jData[0]['comp_details']['general']['basis_set_size'])
+  pre_mocoeffs = jData[0]['results']["wavefunction"]["MO_coefs"]
   if restricted:
     add = ['']
     orb_sym = [None]
@@ -2229,16 +2234,16 @@ def convert_json(jData, all_mo=False, spin=None):
     mocoeffs = [numpy.asarray(scipy.sparse.csr_matrix(tuple([numpy.asarray(d) for d in pre_mocoeffs[0]]), shape=shape).todense()),
                 numpy.asarray(scipy.sparse.csr_matrix(tuple([numpy.asarray(d) for d in pre_mocoeffs[1]]), shape=shape).todense())]
 
-  nmo = jData['results']['wavefunction']['MO_number'] if "nmo" in jData['results']['wavefunction'] else len(mocoeffs[0])
+  nmo = jData[0]['results']['wavefunction']['MO_number'] if "nmo" in jData[0]['results']['wavefunction'] else len(mocoeffs[0])
   for ii in range(nmo):
     for i,j in enumerate(add):
-      a = '%s%s' % (jData['results']['wavefunction']['MO_sym'][i][ii],j)
+      a = '%s%s' % (jData[0]['results']['wavefunction']['MO_sym'][i][ii],j)
       if a not in sym.keys(): sym[a] = 1
       else: sym[a] += 1
       #if is_natorb:
       #  occ_num = ccData.nooccnos[ii]
       if not restricted:
-        occ_num = 1.0 if ii <= jData['results']['wavefunction']['homo_indexes'][i] else 0.0
+        occ_num = 1.0 if ii <= jData[0]['results']['wavefunction']['homo_indexes'][i] else 0.0
       elif ele_num > ue:
         occ_num = 2.0
         ele_num -= 2.0
@@ -2249,7 +2254,7 @@ def convert_json(jData, all_mo=False, spin=None):
       else:
         occ_num = 0.0
       qc.mo_spec.append({'coeffs': mocoeffs[i][ii],
-              'energy': jData['results']['wavefunction']['MO_energies'][i][ii],
+              'energy': jData[0]['results']['wavefunction']['MO_energies'][i][ii],
               'occ_num': occ_num,
               'sym': '%d.%s' %(sym[a],a)
               })
@@ -2259,7 +2264,7 @@ def convert_json(jData, all_mo=False, spin=None):
           del qc.mo_spec[-1]
   
   # Use default order for atomic basis functions if aonames is not present
-  if 'ao_names' not in jData['comp_details']['general']:
+  if 'ao_names' not in jData[0]['comp_details']['general']:
     display('The attribute `aonames` is not present in the parsed data.')
     display('Using the default order of basis functions.')
     
